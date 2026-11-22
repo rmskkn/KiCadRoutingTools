@@ -15,7 +15,7 @@ KiCad accepts as blocking DRC. Now:
 3. check_drc grades the pairs at the rule: the /GND<->HS items leave the
    count (KiCad: 0 with the rule), the rest stay, and the rule is no longer
    listed ungraded;
-4. a rule that stays unmodelled (getField()) is still NOT GRADED, and
+4. a rule that stays unmodelled (hasComponentClass()) is still NOT GRADED, and
    the violations it may make legal are TAGGED `unverified_rule` and counted
    apart (`UNVERIFIED (clearance): N`, JSON `unverified`, board_score
    `drc.unverified`) -- still counted, since a term nothing here
@@ -45,7 +45,7 @@ GND_HS = ('(rule "gnd_hs" (constraint clearance (min 0.2mm)) '
           '(condition "A.NetName == \'/GND\' && B.NetClass == \'HS\'"))')
 #: a term nothing reads (a courtyard term was one until #1832 read it by position)
 UNREAD = ('(rule "unread_hs" (constraint clearance (min 0.2mm)) '
-          '(condition "A.getField(\'x\') == \'y\' && A.NetClass == \'HS\'"))')
+          '(condition "A.hasComponentClass(\'x\') == \'y\' && A.NetClass == \'HS\'"))')
 failures = []
 
 
@@ -138,7 +138,7 @@ def evaluator():
     cr = d.parse_dru(UNREAD)[0][0]
     ast = d.parse_condition_maybe(cr.condition_src)
     dflt = d.RuleItem(type='track', effective_class='Default')
-    check('getField && NetClass: "maybe" for an HS item, "no" for two Default ones',
+    check('hasComponentClass && NetClass: "maybe" for an HS item, "no" for two Default ones',
           maybe(cr, ast, b, dflt, 'F.Cu', ['F.Cu']) is None
           and maybe(cr, ast, dflt, dflt, 'F.Cu', ['F.Cu']) is False)
 

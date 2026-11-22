@@ -35,7 +35,7 @@ import run_utils  # noqa: E402
 PY = [sys.executable, '-X', 'utf8']
 BOARD = os.path.join('kicad_files', 'cap_chain.kicad_pcb')
 COURT = "A.insideCourtyard('C1')"
-UNREAD = "A.getField('x') == 'y'"
+UNREAD = "A.hasComponentClass('x') == 'y'"
 failures = []
 
 

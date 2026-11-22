@@ -111,7 +111,7 @@ KICAD = {
 KICAD_TOL = '0.0005'
 #: cells left off a board
 OMIT = {}
-UNREAD = f'(rule "hc_unread" {HC} (condition "A.getField(\'x\') == \'y\'"))'
+UNREAD = f'(rule "hc_unread" {HC} (condition "A.hasComponentClass(\'x\') == \'y\'"))'
 
 
 def cell(k):

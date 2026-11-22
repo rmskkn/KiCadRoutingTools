@@ -33,7 +33,7 @@ from run_utils import check, evidence  # noqa: E402
 
 PY = [sys.executable, '-X', 'utf8']
 BOARD = os.path.join(REPO, 'kicad_files', 'cap_chain.kicad_pcb')
-UNREAD = "A.getField('x') == 'y'"
+UNREAD = "A.hasComponentClass('x') == 'y'"
 #: rule -> (constraint, the kind its NOT GRADED line names)
 RULES = {'cap gap': ('clearance (min 0.3mm)', 'clearance'),
          'cap width': ('track_width (min 0.3mm)', 'size'),

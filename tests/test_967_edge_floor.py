@@ -268,7 +268,7 @@ class EdgeFloor(unittest.TestCase):
         # A rule whose condition is not modelled MAY bind: named, never read
         # as a pass, and the pad it may bind is not refused for it either.
         dru.write_text('(version 1)\n(rule "maybe" (condition '
-                       '"A.memberOfSheet(\'/power/\')") '
+                       '"A.hasComponentClass(\'/power/\')") '
                        '(constraint edge_clearance (min 0.75mm)))\n', encoding='utf-8')
         s, out = self.cli(board, 'set', 'Y1', '124.7', '103.15', '--rot', '270')
         edge = s['pad_edge_after']

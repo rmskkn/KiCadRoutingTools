@@ -105,7 +105,7 @@ class EdgeRulePads(unittest.TestCase):
         self.assertEqual(rules.for_pad(pcb.footprints['J3'].pads[0], 0.4), (0.0, 0.0, 'cy'))
         self.assertEqual(rules.for_pad(pcb.footprints['C1'].pads[0], 0.4), (0.4, 0.4, ''))
         # not modelled: a predicate, and a term on B (the edge item)
-        for cond, c1 in (("A.memberOfSheet('/rf/')", (0.0, 0.4, '')),
+        for cond, c1 in (("A.hasComponentClass('/rf/')", (0.0, 0.4, '')),
                          ("B.Layer == 'Edge.Cuts' && A.memberOfFootprint('J3')",
                           (0.4, 0.4, ''))):
             with self.subTest(cond=cond):

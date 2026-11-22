@@ -65,7 +65,7 @@ DRU = '''(version 1)
   (constraint annular_width (min 0.07mm)))
 '''
 UNREAD = '''(rule "ring_unread"
-  (condition "A.NetName == '/OE' && A.getField('x') == 'y'")
+  (condition "A.NetName == '/OE' && A.hasComponentClass('x') == 'y'")
   (constraint annular_width (min 0.07mm)))
 '''
 NEGATED = '''(version 1)
@@ -125,7 +125,7 @@ def engine(td):
            f"{n} bound by position inside U1: {by.get(n)}")
     ok(by.get('ring_by_net', {}).get('courtyard') == [] and by['ring_by_net']['unresolved'] is None,
        "the net-name rule is read exactly")
-    ok('getField' in (by.get('ring_unread', {}).get('unresolved') or ''),
+    ok('hasComponentClass' in (by.get('ring_unread', {}).get('unresolved') or ''),
        f"the unread rule says why: {by.get('ring_unread', {}).get('unresolved')}")
     nets = relaxed_via_nets(dr, pcb, rows)
     ok(nets['ring_by_net'] == {'nets': ['/RD'], 'how': 'condition'}, f"/RD: {nets['ring_by_net']}")

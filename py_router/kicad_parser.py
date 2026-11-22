@@ -1026,6 +1026,12 @@ class Footprint:
     # Pad.zone_connection, which already carries it for every pad without one
     # of its own). None = not set. Appended.
     zone_connection: Optional[str] = None
+    # Every field of the footprint with a value, by name: Reference, Value,
+    # Datasheet, Description and the user's own (`(property "MPN" "ABC-1")`),
+    # the text as the file spells it, no variable expanded. What a rule's
+    # `A.getField('MPN')` reads. A field with no text is left out: KiCad reads
+    # it as '', like one the part lacks. Appended.
+    fields: Dict[str, str] = field(default_factory=dict)
 
 
 #: The (attr ...) flags `Footprint.attrs` keeps -- the ones the text form and
@@ -2514,6 +2520,29 @@ def _footprint_sheet_fields(fp_text: str, version: int = 0) -> Tuple[str, str]:
             m = _SHEET_PROPERTY_RE[which].search(head)
         out.append(_unescape_kicad_string(m.group(1)) if m else '')
     return out[0], out[1]
+
+
+_FP_FIELD_RE = re.compile(r'\(property\s+"((?:[^"\\]|\\.)*)"\s+"((?:[^"\\]|\\.)*)"')
+#: The names pcbnew's reader takes as the footprint's sheet, not a field, up to
+#: SHEET_PROPERTIES_MAX_VERSION (see `_SHEET_PROPERTY_RE`).
+_SHEET_PROPERTY_NAMES = frozenset({'Sheetname', 'Sheet name', 'Sheetfile', 'Sheet file'})
+
+
+def _footprint_fields(fp_text: str, version: int = 0) -> Dict[str, str]:
+    """`Footprint.fields` of one footprint block: every `(property "name"
+    "text" ...)` of its header (before the first `(pad `, so a pad cannot lend
+    it one), the names unescaped, a field with no text left out. The
+    Sheetname / Sheetfile properties of a file up to SHEET_PROPERTIES_MAX_VERSION
+    are the sheet (`_footprint_sheet_fields`) and not fields, as for pcbnew."""
+    first_pad = fp_text.find('(pad ')
+    head = fp_text[:first_pad] if first_pad > 0 else fp_text
+    legacy = not version or version <= SHEET_PROPERTIES_MAX_VERSION
+    out: Dict[str, str] = {}
+    for m in _FP_FIELD_RE.finditer(head):
+        name, text = _unescape_kicad_string(m.group(1)), _unescape_kicad_string(m.group(2))
+        if text and not (legacy and name in _SHEET_PROPERTY_NAMES):
+            out.setdefault(name, text)
+    return out
 
 
 _PAREN_OR_QUOTE = re.compile(r'["()]')
@@ -5285,6 +5314,7 @@ def extract_footprints_and_pads(content: str, nets: Dict[int, Net],
         # Footprint.sheet_name), read from the header only -- before the
         # first pad -- so a pad or graphic cannot lend a block a sheet.
         fp_sheet_name, fp_sheet_file = _footprint_sheet_fields(fp_text, _file_version)
+        fp_fields = _footprint_fields(fp_text, _file_version)
 
         # Reference-label geometry (#481): parsed from the Reference sub-node's
         # own slice. None for the uuid-keyed reference-less footprints above.
@@ -5315,6 +5345,7 @@ def extract_footprints_and_pads(content: str, nets: Dict[int, Net],
             has_model=fp_has_model,
             sheet_name=fp_sheet_name,
             sheet_file=fp_sheet_file,
+            fields=fp_fields,
         )
 
         # Extract pads
@@ -9719,6 +9750,14 @@ def build_pcb_data_from_board(board, guide_layer: str = "User.1",
             fp_sheet_file = str(fp.GetSheetfile())
         except Exception:
             fp_sheet_file = ""
+        # The text parser's `_footprint_fields`: every field with a text.
+        fp_fields = {}
+        try:
+            for _field in fp.GetFields():
+                if str(_field.GetText()):
+                    fp_fields.setdefault(str(_field.GetName()), str(_field.GetText()))
+        except Exception:
+            pass
 
         # Reference-label geometry (#481) -- parity with the text parser's
         # RefLabel. Probed on splitflap+ulx3s under KiCad 10:
@@ -9793,6 +9832,7 @@ def build_pcb_data_from_board(board, guide_layer: str = "User.1",
             has_model=fp_has_model,
             sheet_name=fp_sheet_name,
             sheet_file=fp_sheet_file,
+            fields=fp_fields,
         )
 
         # Extract pads

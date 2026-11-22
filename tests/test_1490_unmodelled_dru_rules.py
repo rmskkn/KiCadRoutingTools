@@ -5,7 +5,7 @@ rules (#498), class track-to-track rules (#735) and coupled-pair rules
 (#1293), and since #1491 class/type-scoped rules (`A.NetClass == 'HS' &&
 B.NetClass == 'HS'`, `B.Type == 'Pad'`; since #1528 also `A.NetName == ...`).
 A clearance rule scoped any other way (`A.insideCourtyard(...)` then, read
-by position since #1832; `A.getField(...)` here) got one
+by position since #1832; `A.hasComponentClass(...)` here) got one
 console note and was graded by nothing, so board_score said drc 0 and
 check_complete said DONE while KiCad reported the errors. It is now named `NOT GRADED (clearance)`, the
 clearance half of #1390's size disclosure: board_score lists `drc.dru_rules`
@@ -40,7 +40,7 @@ HOLE_DRU = '''(version 1)
 (rule "via hole" (constraint hole_clearance (min 0.254mm))
   (condition "A.Type == 'Track' && B.Type == 'Via'"))
 (rule "field hole" (constraint hole_clearance (min 0.3mm))
-  (condition "A.getField('x') == 'y'"))
+  (condition "A.hasComponentClass('x') == 'y'"))
 '''
 DRU = '''(version 1)
 (rule "hs gap" (constraint clearance (min 0.3mm))
@@ -50,7 +50,7 @@ DRU = '''(version 1)
 (rule "name gap" (constraint clearance (min 0.3mm))
   (condition "A.NetName == '/HS0' && B.NetName == '/HS1'"))
 (rule "court gap" (constraint clearance (min 0.3mm))
-  (condition "A.getField('x') == 'y' && A.NetClass == 'HS'"))
+  (condition "A.hasComponentClass('x') == 'y' && A.NetClass == 'HS'"))
 (rule "inner tight" (constraint clearance (min 0.15mm)) (layer inner))
 (rule "pair gap" (constraint clearance (min 0.12mm))
   (condition "A.NetClass == 'HS' && AB.isCoupledDiffPair()"))

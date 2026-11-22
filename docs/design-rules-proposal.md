@@ -343,6 +343,7 @@ the subset our item model can answer without guessing:
 | Predicate | Needs | Phase |
 |---|---|---|
 | `(layer name\|outer\|inner)`, `existsOnLayer('X')` (`*` and `?` wildcards, case-sensitive; a pad's mask and paste layers too, #1690), `A.Layer` | layer set | 1 |
+| `(layer "F.SilkS")` or another non-copper layer, on a rule of `clearance`, `track_width`, `via_diameter`, `annular_width`, `hole_clearance`, `via_count`, or `disallow track\|via` only | KiCad tests these kinds' layer clause against the copper layer it checks, so the rule binds no copper item. It is read and scoped, and grades nothing. A rule with any other kind (`hole_size`, `hole_to_hole`, `edge_clearance`, which KiCad binds whatever the clause says; `disallow` of text, graphics or pads) stays unsupported | 1 |
 | `A.NetClass ==/!= 'X'`, `A.hasNetclass('X')`, `A.hasExactNetclass('X')`, same for `B` | the net's effective class (`DesignRules.class_constituents`, #1690): its classes by priority, plus Default when they leave a field unset | 1 |
 | `A.NetName ==/!= 'X'`, `A.Net != B.Net`, `A.Net == B.Net` | net | 1 |
 | `A.Type == 'Track'\|'Via'\|'Pad'\|'Zone'`, `A.Pad_Type`, `A.Via_Type`, `isMicroVia`, `isBlindBuriedVia`, `isPlated` | item type | 1 |
@@ -350,9 +351,11 @@ the subset our item model can answer without guessing:
 | `&&`, `\|\|`, `!`, parentheses, quoted strings, unit arithmetic in values | expression parser | 1 |
 | `A.memberOfFootprint('glob')` (the reference, and the library id when the name holds a `:`, as `'Device:R_*'`; case-sensitive, #1690), `A.intersectsCourtyard('ref')` | footprint ref and library id / courtyard polygon | 2 |
 | `A.memberOfGroup('G')` | group membership (parseable from the file; GUI via `GetParentGroup`) | 2 |
+| `A.memberOfSheet('path')`, `A.memberOfSheetOrChildren('path')` | the part's schematic sheet name (`Footprint.sheet_name`). KiCad compares the name, not the uuid path: case-sensitive, `*` and `?` wildcards, a trailing `/` optional (`'/Power'` is `'/Power/'`), a part with no sheet on the root `'/'`. `memberOfSheet` matches the whole path; `OrChildren` also matches the sheets below it, and its `*` stays inside one path component. False on a track or a via | 2 |
+| `A.getField('name') ==/!= 'X'` | the footprint's fields (`Footprint.fields`). Compared as `A.NetName` is; field names are case-sensitive. KiCad answers `''` for everything but a footprint, so on the copper the graders measure `== 'X'` never binds and `!= 'X'` always does | 2 |
 | `A.intersectsArea('zone')`, `enclosedByArea` | rule-area zone polygons (we parse zones) | 2 |
 | `A.inDiffPair('glob')`, `AB.isCoupledDiffPair()` | diff-pair detection (exists); `AB.isCoupledDiffPair()` as a positive AND term is evaluated since #1293 (KiCad's `MatchDpSuffix`, ported), negated as an AND term ("keep pairs apart") and `inDiffPair()` since #1295; OR'ed or compared it stays unsupported | 2 |
-| `fromTo`, `memberOfSheet`, `hasComponentClass`, `getField`, `A.Length`, assertions | out of scope | never |
+| `fromTo`, `hasComponentClass`, `A.Length`, assertions | out of scope | never |
 
 `A.onLayer` was on this list. KiCad 10 does not compile it, and then enforces no rule
 of the file (#1690, see "A rule file KiCad refuses" in `docs/configuration.md`).
@@ -377,10 +380,12 @@ Kinds the router *consumes* and how:
 | `track_angle (min 135)` | octolinear vs orthogonal smoothing selector | phase 3 |
 | everything else | table only, reported | — |
 
-As shipped, the evaluated predicates are the phase-1 rows plus `memberOfFootprint` and
-`memberOfGroup`. The area predicates are evaluated only for a `disallow` rule on a named
-rule area, which becomes a net-filtered keep-out (#1278, `net_keepouts.py`); the
-courtyard and diff-pair predicates stay unsupported. Of the kinds, the engines read
+As shipped, the evaluated predicates are the phase-1 rows plus `memberOfFootprint`,
+`memberOfGroup`, `memberOfSheet`, `memberOfSheetOrChildren` and `getField`. The area
+predicates are evaluated for a `disallow` rule on a named rule area, which becomes a
+net-filtered keep-out (#1278, `net_keepouts.py`), and by position for `clearance`,
+`track_width` and `hole_clearance` rules (#1843). The courtyard predicates are evaluated
+by position for via sizes, track widths and clearances (#1805, #1832). Of the kinds, the engines read
 `track_width`, `via_diameter` and `hole_size` through the resolver and copper
 `clearance` rules through `kicad_dru.py` (#498 layer rules, track rules); the hole, edge
 and hole-to-hole kinds are not read from rules (Board Setup supplies those floors), and

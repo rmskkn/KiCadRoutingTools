@@ -338,6 +338,14 @@ class RuleItem:
     # (`CourtyardIndex`). None = not measured: a courtyard term then reads as
     # unknown and the rule stays unread, as it always was.
     courtyards: Optional[FrozenSet[Tuple[str, Optional[str], str]]] = None
+    # The schematic sheet of the part the item sits on, as the file spells it
+    # (`Footprint.sheet_name`; '' is the root sheet). None: the item sits on no
+    # part (a track, a via), which memberOfSheet() reads as false.
+    sheet_name: Optional[str] = None
+    # A footprint item's fields as sorted (name, value) pairs
+    # (`Footprint.fields`). Only an item of type 'footprint' has them:
+    # getField() is '' on a pad, a track or a via, measured on kicad-cli 10.0.8.
+    fields: Optional[Tuple[Tuple[str, str], ...]] = None
 
 
 @dataclass
@@ -390,7 +398,8 @@ class Rule:
 
     def layers_for(self, copper_layers: Sequence[str]) -> Optional[List[str]]:
         """Concrete copper layers this rule's (layer ...) clause names, or None
-        for "every layer" (no clause)."""
+        for "every layer" (no clause); [] for a clause naming no copper layer
+        (a non-copper layer, or a copper one the board lacks)."""
         lc = self.layer_clause
         if lc is None:
             return None
@@ -402,6 +411,48 @@ class Rule:
         if lc in ('*.Cu', '*'):
             return list(copper_layers)
         return [lc] if lc in copper_layers else []
+
+
+#: The non-copper layers KiCad's own spelling names (a board's layer table).
+#: A name outside it -- a user's alias, a wildcard like '*.SilkS' -- is not read.
+NON_COPPER_LAYERS = frozenset(
+    {'F.Adhes', 'B.Adhes', 'F.Paste', 'B.Paste', 'F.SilkS', 'B.SilkS', 'F.Mask', 'B.Mask',
+     'Dwgs.User', 'Cmts.User', 'Eco1.User', 'Eco2.User', 'Edge.Cuts', 'Margin',
+     'F.CrtYd', 'B.CrtYd', 'F.Fab', 'B.Fab'} | {f'User.{i}' for i in range(1, 10)})
+#: The kinds KiCad tests a rule's (layer ...) clause for on every item the
+#: graders measure: a rule of only these on a non-copper layer binds no copper
+#: item at all. Measured on kicad-cli 10.0.8, one rule per kind on F.SilkS,
+#: Edge.Cuts, F.Mask and User.1 (and on F.Cu as the control). The kinds it does
+#: not test -- hole_size, hole_to_hole, edge_clearance -- bind whatever the
+#: clause says, and what binds text, graphics, pads on F.Mask (`disallow`
+#: pad / text / graphic / hole) or silk (silk_clearance) is not copper: a rule
+#: of those stays unsupported.
+LAYER_TESTED_KINDS = frozenset({'clearance', 'track_width', 'via_diameter',
+                                'annular_width', 'hole_clearance', 'via_count'})
+#: `disallow` items that sit on copper only: a rule on a non-copper layer
+#: binds none of them (measured as above)
+_COPPER_DISALLOW_ITEMS = frozenset({'track', 'via'})
+
+
+def binds_no_copper(rule: Rule) -> bool:
+    """Does ``rule``, whose (layer ...) clause names a non-copper layer, bind
+    no item at all that the graders measure (tracks, vias, pads, zones)?
+    `layers_for` is then [] and `_rule_matches` says no, so the rule is read as
+    such -- parsed and scoped, nothing to grade -- rather than called
+    unsupported. False when the layer is not one KiCad names, when any of the
+    rule's constraints is a kind KiCad does not test the clause for, and for a
+    coupled-pair rule (the pair step reads those itself, #1293)."""
+    if rule.layer_clause not in NON_COPPER_LAYERS or not rule.constraints \
+            or rule.coupled or rule.keep_apart:
+        return False
+    for kind, spec in rule.constraints.items():
+        if kind == 'disallow':
+            items = spec.get('disallow') or ()
+            if not items or not set(items) <= _COPPER_DISALLOW_ITEMS:
+                return False
+        elif kind not in LAYER_TESTED_KINDS:
+            return False
+    return True
 
 
 # --------------------------------------------------------------------------
@@ -561,11 +612,14 @@ def parse_dru(text: str) -> Tuple[List[Rule], List[str]]:
                                               or rule.courtyard_condition is not None):
             lc = rule.layer_clause
             if not (lc in ('outer', 'inner', '*.Cu', '*') or lc.endswith('.Cu')):
-                rule.unsupported = rule.unsupported or f"layer clause {lc!r} (non-copper)"
-                rule.courtyard_condition = None
-        # An area rule (#1843) keeps its condition under a non-copper layer
-        # clause: `layers_for` is then empty, so it binds no copper, which is
-        # how kicad-cli 10.0.6 grades a clearance rule on F.SilkS.
+                if rule.unsupported is not None or not binds_no_copper(rule):
+                    rule.unsupported = rule.unsupported or f"layer clause {lc!r} (non-copper)"
+                    rule.courtyard_condition = None
+        # A rule `binds_no_copper` accepts is read, not unsupported: `layers_for`
+        # is [] for it, so it binds nothing the graders measure. An area rule
+        # (#1843) keeps its condition under a non-copper layer clause as well:
+        # `layers_for` is empty, so it binds no copper, which is how kicad-cli
+        # 10.0.6 grades a clearance rule on F.SilkS.
         rule.unconsumed_kinds = sorted(k for k in rule.constraints
                                        if k not in CONSUMED_KINDS)
         if 'clearance' in rule.constraints and rule.unsupported is None:
@@ -619,6 +673,10 @@ def _via_attr(v, key):
 # Supported functions: hasNetclass, hasExactNetclass, existsOnLayer (a wildcard is
 #   a layer pattern), isMicroVia,
 #   isBlindBuriedVia, isPlated, memberOfFootprint, memberOfGroup,
+#   memberOfSheet('path') and memberOfSheetOrChildren('path') (the part's
+#   schematic sheet; false on a track or a via: `_sheet_matches`),
+#   getField('name') compared with == or != (a footprint's field; '' on a pad, a
+#   track or a via: `_call`),
 #   inDiffPair('pattern') (#1295), and AB.isCoupledDiffPair() as a term of an
 #   AND only, positive (#1293: the pair's own P<->N rule) or negated (#1295:
 #   KiCad's "keep pairs apart" rule); OR'ed or compared it stays Unsupported
@@ -626,9 +684,8 @@ def _via_attr(v, key):
 #   insideArea (each modelled ONLY for a `disallow` rule's net-filtered keep-out:
 #   parse_condition(areas=True), net_keepouts.derive_area_keepouts),
 #   intersectsCourtyard, intersectsFrontCourtyard, intersectsBackCourtyard,
-#   isCoupledDiffPair in any other position, fromTo, memberOfSheet,
-#   memberOfSheetOrChildren, hasComponentClass, getField, and any numeric
-#   comparison (<, >, arithmetic).
+#   isCoupledDiffPair in any other position, fromTo, hasComponentClass, and any
+#   numeric comparison (<, >, arithmetic).
 # Read, though KiCad refuses it (`kicad_condition_refusal`, which is what says
 #   so): onLayer, the spelling existsOnLayer replaced. Whether the tools should
 #   read a rule KiCad will not load is a question they have not been asked to
@@ -647,7 +704,8 @@ _SUPPORTED_PROPS = {'netclass', 'netname', 'net', 'type', 'layer', 'pad_type',
                     'via_type', 'pad_number'}
 _SUPPORTED_FUNCS = {'hasnetclass', 'hasexactnetclass', 'onlayer', 'existsonlayer',
                     'ismicrovia', 'isblindburiedvia', 'isplated',
-                    'memberoffootprint', 'memberofgroup', 'indiffpair'}
+                    'memberoffootprint', 'memberofgroup', 'indiffpair',
+                    'memberofsheet', 'memberofsheetorchildren', 'getfield'}
 #: Rule-area predicates. KiCad's insideArea() is the older spelling of
 #: intersectsArea() and KiCad 10 still grades it.
 _AREA_FUNCS = {'insidearea', 'intersectsarea', 'enclosedbyarea'}
@@ -664,8 +722,7 @@ _COURTYARD_FUNCS = {'insidecourtyard': None, 'intersectscourtyard': None,
 _KNOWN_UNSUPPORTED_FUNCS = {
     'insidearea', 'intersectsarea', 'enclosedbyarea', 'intersectscourtyard',
     'intersectsfrontcourtyard', 'intersectsbackcourtyard',
-    'iscoupleddiffpair', 'fromto', 'memberofsheet', 'memberofsheetorchildren',
-    'hascomponentclass', 'getfield', 'isbetween',
+    'iscoupleddiffpair', 'fromto', 'hascomponentclass', 'isbetween',
 }
 
 
@@ -693,15 +750,19 @@ _NUMERIC_OPS = ('<', '>', '<=', '>=', '+', '-', '*', '/')
 _KICAD_REFUSES = 'KiCad refuses'
 
 
+_PART_FUNCS = {'memberoffootprint': 'memberOfFootprint', 'memberofsheet': 'memberOfSheet',
+               'memberofsheetorchildren': 'memberOfSheetOrChildren', 'getfield': 'getField'}
+
+
 def _reads_one_part(node) -> Optional[str]:
     """The first term of a parsed condition that scopes it to one pad or one
-    part (A.Pad_Number, memberOfFootprint()), or None."""
+    part (A.Pad_Number, memberOfFootprint(), memberOfSheet()), or None."""
     if not isinstance(node, tuple) or not node:
         return None
     if node[0] == 'prop':
         return f'{node[1]}.Pad_Number' if node[2] == 'pad_number' else None
     if node[0] == 'call':
-        return f'{node[1]}.memberOfFootprint()' if node[2] == 'memberoffootprint' else None
+        return f'{node[1]}.{_PART_FUNCS[node[2]]}()' if node[2] in _PART_FUNCS else None
     if node[0] in ('cmp', 'and', 'or', 'not'):
         return next(filter(None, map(_reads_one_part, node[1:])), None)
     return None
@@ -1442,7 +1503,9 @@ def _eval(node, a: RuleItem, b: Optional[RuleItem], layer: Optional[str],
             eq = (lv == rv)
         return eq if cop == '==' else not eq
     if op == 'call':
-        return bool(_call(node, a, b, layer, ctx))
+        v = _call(node, a, b, layer, ctx)
+        # a string alone is false, as for a property: a bare getField('x')
+        return False if isinstance(v, str) else bool(v)
     if op == 'area':
         it = _item(node[1], a, b)
         if it is None:
@@ -1481,6 +1544,13 @@ def _eval(node, a: RuleItem, b: Optional[RuleItem], layer: Optional[str],
 
 
 def _cmp_strings(lhs_node, lv: str, rv: str, rhs_node=None) -> bool:
+    sides = [n for n in (lhs_node, rhs_node) if n is not None]
+    if any(n[0] == 'call' and n[2] == 'getfield' for n in sides) \
+            and all(n[0] in ('call', 'lit') for n in sides):
+        # getField() against a literal or another getField(), measured on
+        # kicad-cli 10.0.8: the NetName compare. Case-insensitive, and only a
+        # literal on the RIGHT is a wildcard ('AB*' == getField() is exact).
+        return netname_matches(lv, rv, wildcard=rhs_node is not None and rhs_node[0] == 'lit')
     prop = lhs_node[2] if lhs_node[0] == 'prop' else None
     if 'pad_number' in (prop, rhs_node[2] if rhs_node is not None
                         and rhs_node[0] == 'prop' else None):
@@ -1586,6 +1656,14 @@ def _call(node, a, b, layer, ctx=None):
     if which == 'AB':
         raise Unsupported(f"AB.{fn}")
     it = _item(which, a, b)
+    if fn == 'getfield':
+        # A footprint's field, '' for the name it lacks and for every item but a
+        # footprint -- a pad, a track, a via, a missing B: measured on kicad-cli
+        # 10.0.8, where `A.getField('MPN') == 'x'` binds a part and none of its
+        # pads, and `!= 'x'` binds every pad. Field names are case-sensitive.
+        if len(args) != 1 or it is None or it.type != 'footprint':
+            return ''
+        return next((v for k, v in it.fields or () if k == args[0]), '')
     if it is None:
         return False
     if it is _EDGE_ITEM and fn in ('hasnetclass', 'hasexactnetclass'):
@@ -1625,6 +1703,9 @@ def _call(node, a, b, layer, ctx=None):
                 and _footprint_named(args[0], it.footprint_ref, it.footprint_lib))
     if fn == 'memberofgroup':
         return bool(args) and args[0] in it.groups
+    if fn in ('memberofsheet', 'memberofsheetorchildren'):
+        return (len(args) == 1 and it.sheet_name is not None
+                and _sheet_matches(args[0], it.sheet_name, fn == 'memberofsheetorchildren'))
     if fn == 'indiffpair':
         return bool(args) and _in_diff_pair(it, args[0], ctx)
     raise Unsupported(f"predicate {fn}()")
@@ -1636,6 +1717,38 @@ def _footprint_named(pattern: str, ref: Optional[str], lib: Optional[str]) -> bo
     library id too (#1690)."""
     return ref is not None and (_wx_matches(pattern, ref) or (
         ':' in pattern and lib is not None and _wx_matches(pattern, lib)))
+
+
+def _sheet_matches(pattern: str, sheet: str, children: bool) -> bool:
+    """memberOfSheet() / memberOfSheetOrChildren() of a part on ``sheet`` (the
+    sheet name as the file spells it: '/Power/', '/Power/Buck/', '' for the
+    root), measured on kicad-cli 10.0.8.
+
+    KiCad compares the sheet NAME, not the uuid path, case-sensitively and with
+    wxString::Matches wildcards. Both sides read as a path ending in '/', so
+    '/Power', '/Power/' and a part whose sheet is spelled '/Power' all agree,
+    and the root sheet ('' or '/') is '/'. An empty pattern binds nothing.
+    memberOfSheet() matches the whole path, a '*' reaching across '/'
+    ('/Power/*' binds '/Power/Buck/' and not '/Power/'). With ``children`` the
+    pattern is a parent: it is matched against as many leading components of
+    the sheet as it has, so '*' stays inside one component and '/Power/' binds
+    '/Power/Buck/' too; the pattern '/' binds every part, and the root sheet
+    matches no other pattern. Not reproduced: the pattern '//', which KiCad
+    reads as the root sheet."""
+    if not pattern:
+        return False
+    sheet = sheet if sheet.endswith('/') else sheet + '/'
+    pattern = pattern if pattern.endswith('/') else pattern + '/'
+    if not children:
+        return _wx_matches(pattern, sheet)
+    if pattern == '/':
+        return True
+    if sheet == '/':
+        return False
+    depth = pattern.count('/')
+    if sheet.count('/') > depth:
+        sheet = '/'.join(sheet.split('/')[:depth]) + '/'
+    return _wx_matches(pattern, sheet)
 
 
 #: #1805: the first kicad-cli release that tests a `via_diameter` rule's
@@ -1785,6 +1898,8 @@ class DesignRules:
     memberships: Dict[int, FrozenSet[str]] = field(default_factory=dict)  # net_id -> classes
     # footprint key -> (its reference as the file spells it, its library id)
     footprint_ids: Dict[str, Tuple[str, str]] = field(default_factory=dict)
+    # footprint key -> the schematic sheet it sits on (`Footprint.sheet_name`)
+    sheets: Dict[str, str] = field(default_factory=dict)
     # class name -> the fields its project entry leaves unset (`class_constituents`)
     unset_fields: Dict[str, FrozenSet[str]] = field(default_factory=dict)
     net_names: Dict[int, str] = field(default_factory=dict)
@@ -1832,6 +1947,8 @@ class DesignRules:
                         if getattr(n, 'name', None)}
         dr.groups = _groups_by_ref(pcb_data)
         dr.footprint_ids = _footprint_ids(pcb_data)
+        dr.sheets = {key: getattr(fp, 'sheet_name', '') or ''
+                     for key, fp in (getattr(pcb_data, 'footprints', None) or {}).items()}
         if path:
             dr._load_project_file(os.path.splitext(path)[0] + '.kicad_pro', path)
             dru = os.path.splitext(path)[0] + '.kicad_dru'
@@ -2086,9 +2203,23 @@ class DesignRules:
             footprint_ref=fp_ref, footprint_lib=fp_lib, pad_type=getattr(pad, 'pad_type', None),
             pad_number=getattr(pad, 'pad_number', None),
             groups=self.groups.get(ref, frozenset()),
+            sheet_name=self.sheets.get(ref),
             xy=(getattr(pad, 'global_x', None), getattr(pad, 'global_y', None))
             if getattr(pad, 'global_x', None) is not None else None,
             clearance_override=(getattr(pad, 'local_clearance', 0) or None))
+
+    def item_for_footprint(self, key: str, fp) -> RuleItem:
+        """A RuleItem for the footprint itself (type 'footprint'), the one item
+        getField() reads: its fields, besides the facts a pad of it carries.
+        No grader measures a footprint against a copper rule, so the model's
+        steps do not build one; a caller asking what a rule says of a part does."""
+        ref, lib = self.footprint_ids.get(key, (key, None))
+        return RuleItem(type='footprint', footprint_ref=ref, footprint_lib=lib,
+                        sheet_name=self.sheets.get(key, ''),
+                        groups=self.groups.get(key, frozenset()),
+                        fields=tuple(sorted((getattr(fp, 'fields', None) or {}).items())),
+                        xy=(getattr(fp, 'x', None), getattr(fp, 'y', None))
+                        if getattr(fp, 'x', None) is not None else None)
 
     # ---------------- resolution ----------------
 

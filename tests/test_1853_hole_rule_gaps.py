@@ -296,7 +296,7 @@ def walk(td):
     b = stage(os.path.join(td, 'wd'), 'track_fits', dru=dru(
         '(rule "a" (constraint hole_clearance (min 0.254mm)))\n',
         '(rule "odd" (constraint hole_clearance (min 0.3mm))\n'
-        "  (condition \"A.getField('x') == 'y'\"))\n"))
+        "  (condition \"A.hasComponentClass('x') == 'y'\"))\n"))
     pcb = load(b)
     cfg = rules_of(b, pcb, report=True)
     got = cfg.hole_rules.via_value(pcb.vias[0], 'F.Cu')

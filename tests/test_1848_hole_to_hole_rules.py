@@ -50,7 +50,7 @@ DRILL_TYPES = ('via-drill-hole', 'pad-drill-via-drill', 'pad-drill-via-drill-sam
 ONE = '(version 1)\n(rule "drill to drill"\n  (constraint hole_to_hole (min 0.4mm)))\n'
 TIGHT = '(version 1)\n(rule "tight"\n  (constraint hole_to_hole (min 0.1mm)))\n'
 UNREAD = ('(version 1)\n(rule "unread"\n  (constraint hole_to_hole (min 0.4mm))\n'
-          '  (condition "A.getField(\'x\') == \'y\'"))\n')
+          '  (condition "A.hasComponentClass(\'x\') == \'y\'"))\n')
 PAD = ('\t(footprint "TH"\n\t\t(layer "F.Cu")\n\t\t(at 16 3)\n'
        '\t\t(property "Reference" "J1"\n\t\t\t(at 0 0 0)\n\t\t\t(layer "F.SilkS")\n\t\t)\n'
        '\t\t(pad "1" thru_hole circle\n\t\t\t(at 0 0)\n\t\t\t(size 0.5 0.5)\n'

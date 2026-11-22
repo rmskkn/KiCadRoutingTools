@@ -120,6 +120,8 @@ class RoutedHoleRules:
             self._blind['pad_number'] = None
         if 'memberofgroup' not in reads:
             self._blind['groups'] = frozenset()
+        if not reads & {'memberofsheet', 'memberofsheetorchildren'}:
+            self._blind['sheet_name'] = None
         self._net_key: Dict[int, tuple] = {}
         groups: Dict[tuple, list] = {}
         for nid, net in sorted((getattr(pcb_data, 'nets', None) or {}).items()):

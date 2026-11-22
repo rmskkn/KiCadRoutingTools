@@ -57,7 +57,7 @@ def main():
            f"{tag}: {text[:110]}")
         ok(skipped == ['r'], f"{tag}: still in the reader's unmodelled list")
     print("2. a scope nothing here reads")
-    text, skipped = notes("A.memberOfSheet('/x')")
+    text, skipped = notes("A.hasComponentClass('/x')")
     ok('skipped, KiCad will still enforce it' in text and skipped == ['r'],
        f"still says skipped: {text[:110]}")
     from design_rules import parse_dru

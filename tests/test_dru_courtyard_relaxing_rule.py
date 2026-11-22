@@ -47,7 +47,7 @@ RULES = {
     'tp exclusion': ('(min -1mm)', "A.Reference == 'TP*'", True),
     'zero': ('(min 0mm)', None, True),
     'max only': ('(max 1mm)', None, True),
-    'unread relax': ('(min -1mm)', "A.getField('x') == 'y'", True),
+    'unread relax': ('(min -1mm)', "A.hasComponentClass('x') == 'y'", True),
     'tight': ('(min 0.5mm)', None, False),
 }
 #: gap between a pair's courtyards (negative: they overlap)
@@ -170,7 +170,7 @@ def kicad(td, cli):
        f'kicad-cli {ver}, no rule: courtyards_overlap on each overlapping pair', sorted(base))
     for name, (_c, _w, relax) in RULES.items():
         if name == 'unread relax':
-            continue                  # KiCad reads getField; its condition binds nothing here
+            continue                  # KiCad reads hasComponentClass; its condition binds nothing here
         rows, _v = kicad_rows(td, 'k_' + name.replace(' ', '_'), [name], cli)
         if relax:
             ok(rows <= base, f"'{name}': every error row is one the board has with no rule",

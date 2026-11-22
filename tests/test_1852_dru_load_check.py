@@ -62,7 +62,7 @@ HEAD = '.kicad_dru: KiCad ENFORCES NO RULE OF THIS FILE'
 WORKERS = 3
 
 _OK = ('(rule "court gap" (constraint clearance (min 0.3mm))\n'
-       "  (condition \"A.insideCourtyard('J1') && A.getField('x') == ''\"))\n")
+       "  (condition \"A.insideCourtyard('J1') && A.hasComponentClass('x') == ''\"))\n")
 
 
 def _before(rule):

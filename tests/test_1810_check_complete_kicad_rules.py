@@ -43,10 +43,10 @@ import check_complete  # noqa: E402
 PY = [sys.executable, '-X', 'utf8']
 FIXTURE = os.path.join(REPO, 'tests', 'fixtures', '1643', 'edge_gap.kicad_pcb')
 RULE = ('(version 1)\n(rule "court gap" (constraint clearance (min 0.3mm))\n'
-        "  (condition \"A.insideCourtyard('J1') && A.getField('x') == ''\"))\n")
-# check_drc reads a courtyard term by position (#1832) but not getField(), so
+        "  (condition \"A.insideCourtyard('J1') && A.hasComponentClass('x') == ''\"))\n")
+# check_drc reads a courtyard term by position (#1832) but not hasComponentClass(), so
 # the rule stays one it cannot grade; kicad-cli 10.0.6 reads a pad's
-# getField('x') as '' and grades the rule as the courtyard rule alone
+# hasComponentClass('x') as '' and grades the rule as the courtyard rule alone
 # (met: 0 rows, broken: 1)
 _OK = RULE.split('\n', 1)[1]
 
@@ -180,7 +180,7 @@ def part1(b):
     try:
         with open(dru, 'w', encoding='utf-8') as fh:
             fh.write(RULE + '(rule "court gap" (constraint clearance (min 0.1mm))\n'
-                            "  (condition \"A.insideCourtyard('J2') && A.getField('x') == ''\"))\n")
+                            "  (condition \"A.insideCourtyard('J2') && A.hasComponentClass('x') == ''\"))\n")
         code, doc = graded(b['met'], ok, '--kicad-rules')
         check('fails closed on a rule name declared twice',
               code == 4 and "names 2 rule(s) 'court gap'" in doc['reason'],

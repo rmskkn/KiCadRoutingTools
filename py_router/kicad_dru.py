@@ -307,6 +307,13 @@ def _parse_dru_full(text: str, copper_layers: List[str]):
         if not _coupled_memo:
             _coupled_memo.append(_coupled_graded_orders(text))
         return _coupled_memo[0]
+
+    _no_copper_memo: List[frozenset] = []
+
+    def _no_copper_orders() -> frozenset:
+        if not _no_copper_memo:
+            _no_copper_memo.append(_no_copper_rule_orders(text))
+        return _no_copper_memo[0]
     for order, node in enumerate(_parse_nodes(_tokenize(text))):
         if not isinstance(node, list) or not node or node[0] != "rule":
             continue
@@ -341,6 +348,14 @@ def _parse_dru_full(text: str, copper_layers: List[str]):
             isinstance(layer_clause, str)
             and (layer_clause in ('outer', 'inner', '*.Cu', '*')
                  or layer_clause.endswith('.Cu'))))
+        if has_layer_clause and order in _no_copper_orders():
+            # KiCad tests a clearance rule's layer clause against the copper
+            # layer being checked (measured on kicad-cli 10.0.8), so a rule on
+            # a non-copper layer binds no copper item: nothing for either
+            # channel to price or grade
+            notes.append(f"rule '{name}': clearance {clearance_mm}mm on {layer_clause}, "
+                         f"a non-copper layer -- binds no copper item")
+            continue
         track = (_parse_track_condition(condition)
                  if condition and copper_clause else None)
         if track is not None:
@@ -532,15 +547,18 @@ def read_board_track_clearances(board_path: str) -> Tuple[List[TrackRule], List[
 # KiCad's length DRC does (net_queries.net_match_length, mode 'total'). Before
 # it, check_drc and board_score read a board clean that KiCad failed 8 times.
 #
-# Honoured conditions: none (every net), or `||`-joined terms each of which is
-# `A.NetClass == 'X'`, `A.NetName == 'X'`, `A.hasNetclass('X')` or
-# `A.inDiffPair('X')`. KiCad's string `==` matches `*` / `?` wildcards
-# case-insensitively (libeval VALUE::EqualTo -> WildCompareString), so these
-# do too. NetClass is read as membership, as the track channel reads it.
+# Honoured conditions: none (every net), or `&&`-joined factors, each either
+# `||`-joined terms, each of which is `A.NetClass == 'X'`, `A.NetName == 'X'`,
+# `A.hasNetclass('X')` or `A.inDiffPair('X')`, or one such term negated
+# (`!=`, `!A.hasNetclass('X')`, `!A.inDiffPair('X')`) to leave nets out. Each
+# term is a fact about the net, so KiCad's `&&` and `!` of them bind a net as
+# they read (measured on kicad-cli 10.0.8). KiCad's string `==` matches `*` / `?`
+# wildcards case-insensitively (libeval VALUE::EqualTo -> WildCompareString), so
+# these do too. NetClass is read as membership, as the track channel reads it.
 # inDiffPair is KiCad's inDiffPairFunc (#1303): the net has a MatchDpSuffix
 # complement that exists on the board, and its base name -- or the base
 # without its trailing '_' -- matches X with wxString::Matches, which is
-# case-SENSITIVE. Anything else -- another predicate, `&&`, a (layer ..)
+# case-SENSITIVE. Anything else -- another predicate, an item type, a (layer ..)
 # clause, a time-domain bound -- is kept as an UNSUPPORTED rule with its
 # reason, never dropped: a grader must say what it did not grade.
 #
@@ -549,9 +567,11 @@ def read_board_track_clearances(board_path: str) -> Tuple[List[TrackRule], List[
 # option) and `diff_pair_uncoupled` (diff_pair_uncoupled_length_too_long).
 # check_drc grades both; each kind is its own rule list, because KiCad picks
 # the binding rule per constraint type.
+# KiCad reads a property or function name in any case (`A.netname`,
+# `A.hasnetclass`, measured on kicad-cli 10.0.8) and the item `A` in upper case.
 _LEN_TERM = re.compile(
-    r"^A\s*\.\s*(?:(NetClass|NetName)\s*==\s*['\"]([^'\"]*)['\"]"
-    r"|(hasNetclass|inDiffPair)\s*\(\s*['\"]([^'\"]*)['\"]\s*\))$")
+    r"^A\s*\.\s*(?:((?i:NetClass|NetName))\s*==\s*['\"]([^'\"]*)['\"]"
+    r"|((?i:hasNetclass|inDiffPair))\s*\(\s*['\"]([^'\"]*)['\"]\s*\))$")
 _TIME_VAL = re.compile(r"^(-?[0-9.]+)\s*(fs|ps|ns|us|s)$")
 _UNIT_PS = {'fs': 1e-3, 'ps': 1.0, 'ns': 1e3, 'us': 1e6, 's': 1e12}
 
@@ -596,9 +616,24 @@ class LengthRule(NamedTuple):
     #: after the ||-list (KiCad's `!=` is the negation of its wildcard,
     #: case-insensitive `==`, measured on kicad-cli 10.0.8)
     exclude: Tuple[str, ...] = ()
+    #: terms the rule leaves out the same way: `A.NetClass != 'x'`,
+    #: `!A.hasNetclass('x')`, `!A.inDiffPair('x')`, as ('netclass' |
+    #: 'hasnetclass' | 'indiffpair', pattern). A net a term holds for is not
+    #: bound. 'hasnetclass' matches a class name as wxString::Matches does,
+    #: case-sensitive, where 'netclass' is a `==`, case-insensitive.
+    exclude_terms: Tuple[Tuple[str, str], ...] = ()
+    #: further ||-lists ANDed with `terms` (`A.NetClass == 'DDR' && A.NetName ==
+    #: 'DQ*'`): the rule binds a net only when every list has a term that holds
+    also: Tuple[Tuple[Tuple[str, str], ...], ...] = ()
 
 
-_LEN_NOT_NAME = re.compile(r"^A\s*\.\s*NetName\s*!=\s*['\"]([^'\"]*)['\"]$")
+_LEN_NOT_NAME = re.compile(
+    r"^A\s*\.\s*(?i:NetName)\s*!=\s*['\"]([^'\"]*)['\"]$")
+#: A factor that leaves nets out by class: `A.NetClass != 'x'`, or by a
+#: predicate, `!A.hasNetclass('x')`, `!A.inDiffPair('x')`
+_LEN_NOT_TERM = re.compile(
+    r"^(?:A\s*\.\s*(?i:NetClass)\s*!=\s*['\"]([^'\"]*)['\"]"
+    r"|!\s*A\s*\.\s*((?i:hasNetclass|inDiffPair))\s*\(\s*['\"]([^'\"]*)['\"]\s*\))$")
 
 
 def _split_top(expr: str, op: str) -> List[str]:
@@ -642,42 +677,48 @@ def _strip_parens(t: str) -> str:
 
 
 def _parse_length_condition(expr: Optional[str]):
-    """(terms, reason, exclude): terms as LengthRule.terms, reason '' when
-    honoured, exclude as LengthRule.exclude.
+    """(terms, reason, exclude, exclude_terms, also): the first four as
+    LengthRule's fields of those names, reason '' when honoured.
 
-    The honoured shape is an ||-list of net terms, optionally ANDed with
-    `A.NetName != '...'` factors: "these classes or nets, but not those
-    nets". Exclusions alone bind every other net."""
+    The honoured shape is an AND of factors, each an ||-list of net terms
+    (`A.NetClass`, `A.NetName`, `hasNetclass`, `inDiffPair`) or a net the rule
+    leaves out: "these classes or nets, but not those". Every term here is a
+    fact about the net, so KiCad evaluates `!`, `!=` and `&&` of them as one
+    condition per net (measured on kicad-cli 10.0.8). Exclusions alone bind
+    every other net."""
     if expr is None or not expr.strip():
-        return (), '', ()
+        return (), '', (), (), ()
+    exclude, exclude_terms, groups = [], [], []
     factors = [_strip_parens(f) for f in _split_top(expr, '&&')]
-    exclude = []
-    keep = []
     for f in factors:
         m = _LEN_NOT_NAME.match(f)
+        n = _LEN_NOT_TERM.match(f)
         if m:
             exclude.append(m.group(1))
+        elif n:
+            kind = 'netclass' if n.group(1) is not None else n.group(2).lower()
+            exclude_terms.append((kind, n.group(1) if n.group(1) is not None else n.group(3)))
         else:
-            keep.append(f)
-    if len(keep) > 1 or any('!' in f or '&&' in f for f in keep):
-        return None, f"condition {expr!r} is not an ||-list of net terms", ()
-    if not keep:
-        return (), '', tuple(exclude)
-    terms = []
-    for raw in _split_top(keep[0], '||'):
-        t = raw.strip()
-        while t.startswith('(') and t.endswith(')'):
-            t = t[1:-1].strip()
-        m = _LEN_TERM.match(t)
-        if not m:
-            return None, f"condition term {raw.strip()!r} is not modelled", ()
-        if m.group(1) == 'NetName':
-            terms.append(('netname', m.group(2)))
-        elif m.group(3) == 'inDiffPair':
-            terms.append(('indiffpair', m.group(4)))
-        else:
-            terms.append(('netclass', m.group(2) if m.group(1) else m.group(4)))
-    return tuple(terms), '', tuple(exclude)
+            terms = []
+            for raw in _split_top(f, '||'):
+                t = raw.strip()
+                while t.startswith('(') and t.endswith(')'):
+                    t = t[1:-1].strip()
+                m = _LEN_TERM.match(t)
+                if not m:
+                    if len(factors) > 1 or '!' in f or '&&' in f:
+                        return (None, f"condition {expr!r} is not an ||-list of net terms",
+                                (), (), ())
+                    return None, f"condition term {raw.strip()!r} is not modelled", (), (), ()
+                if m.group(1) is not None and m.group(1).lower() == 'netname':
+                    terms.append(('netname', m.group(2)))
+                elif m.group(3) is not None and m.group(3).lower() == 'indiffpair':
+                    terms.append(('indiffpair', m.group(4)))
+                else:
+                    terms.append(('netclass', m.group(2) if m.group(1) else m.group(4)))
+            groups.append(tuple(terms))
+    return (groups[0] if groups else ()), '', tuple(exclude), tuple(exclude_terms), \
+        tuple(groups[1:])
 
 
 _KIND_NOUN = {'length': 'length window', 'skew': 'skew window',
@@ -728,7 +769,7 @@ def parse_dru_length_rules(text: str, kinds=('length',), time_domain: bool = Fal
                 notes.append(f"rule '{name}': {_KIND_NOUN.get(kind, kind)}, "
                              f"severity ignore -- skipped")
             continue
-        terms, why, exclude = _parse_length_condition(condition)
+        terms, why, exclude, exclude_terms, also = _parse_length_condition(condition)
         if layer_clause is not None and terms is not None:
             terms, why = None, f"a (layer {layer_clause}) clause is not modelled"
         for kind, bounds, within, timed, times in found:
@@ -743,9 +784,12 @@ def parse_dru_length_rules(text: str, kinds=('length',), time_domain: bool = Fal
                     t, w = None, "its bounds mix time and length units"
                 else:
                     bounds, unit = times, 'ps'
+            honoured = t is not None
             rules.append(LengthRule(str(name), bounds.get('min'), bounds.get('opt'),
                                     bounds.get('max'), t, w, severity, kind, within,
-                                    unit, exclude if t is not None else ()))
+                                    unit, exclude if honoured else (),
+                                    exclude_terms if honoured else (),
+                                    also if honoured else ()))
     return rules, notes
 
 
@@ -908,19 +952,20 @@ def length_rule_matches(rule: LengthRule, net_name: str, classes,
         return None
     if rule.exclude and any(_kicad_wild_eq(x, net_name or '') for x in rule.exclude):
         return False
-    if not rule.terms:
-        return True
     cls = list(classes or ('Default',))
-    for kind, pat in rule.terms:
+
+    def holds(kind, pat):
         if kind == 'netname':
-            if _kicad_wild_eq(pat, net_name or ''):
-                return True
-        elif kind == 'indiffpair':
-            if in_diff_pair(net_name or '', pat, net_names):
-                return True
-        elif any(_kicad_wild_eq(pat, c) for c in cls):
-            return True
-    return False
+            return _kicad_wild_eq(pat, net_name or '')
+        if kind == 'indiffpair':
+            return in_diff_pair(net_name or '', pat, net_names)
+        if kind == 'hasnetclass':
+            return any(_wx_matches(pat, c) for c in cls)
+        return any(_kicad_wild_eq(pat, c) for c in cls)
+    if any(holds(k, p) for k, p in rule.exclude_terms):
+        return False
+    return all(any(holds(k, p) for k, p in group)
+               for group in ((rule.terms,) if rule.terms else ()) + rule.also)
 
 
 def in_diff_pair(net_name: str, pattern: str, net_names=None) -> bool:
@@ -1299,6 +1344,19 @@ def _coupled_graded_orders(text: str) -> frozenset:
         from design_rules import parse_dru
         return frozenset(r.order for r in parse_dru(text)[0]
                          if r.coupled and not r.unsupported)
+    except Exception:                                            # noqa: BLE001
+        return frozenset()
+
+
+def _no_copper_rule_orders(text: str) -> frozenset:
+    """The file positions of the rules `design_rules.parse_dru` reads as
+    binding no copper: a (layer ...) clause naming a non-copper layer on a rule
+    of the kinds KiCad tests it for (`design_rules.binds_no_copper`), and a
+    condition it reads. Any other rule on a non-copper layer is not one."""
+    try:
+        from design_rules import parse_dru, NON_COPPER_LAYERS
+        return frozenset(r.order for r in parse_dru(text)[0]
+                         if r.layer_clause in NON_COPPER_LAYERS and not r.unsupported)
     except Exception:                                            # noqa: BLE001
         return frozenset()
 
